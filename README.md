@@ -507,7 +507,7 @@ Built with these amazing **FREE** tools:
 ---
 
 ![Visitors](https://visitor-badge.laobi.icu/badge?page_id=Auto-Apply-Jobs)
-![Last Commit](https://img.shields.io/github/last-commit/yourusername/Auto-Apply-Jobs)
+![Last Commit](https://img.shields.io/github/last-commit/prajapat23puneet/Auto-Apply-Jobs)
 ![Code Size](https://img.shields.io/github/languages/code-size/prajapat23puneet/Auto-Apply-Jobs)
 
 </div>
