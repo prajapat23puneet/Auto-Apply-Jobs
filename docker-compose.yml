@@ -1,0 +1,80 @@
+version: '3.8'
+
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: job-agent-n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      # Basic n8n configuration
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_USER:-admin}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD:-changeme}
+      
+      # Encryption key for credentials (IMPORTANT: Keep this secret!)
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      
+      # Timezone
+      - GENERIC_TIMEZONE=Asia/Kolkata
+      - TZ=Asia/Kolkata
+      
+      # Webhook URL (for webhooks if needed)
+      - WEBHOOK_URL=http://localhost:5678/
+      
+      # Execution settings
+      - EXECUTIONS_DATA_SAVE_ON_ERROR=all
+      - EXECUTIONS_DATA_SAVE_ON_SUCCESS=all
+      - EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=true
+      
+      # Performance settings
+      - N8N_PAYLOAD_SIZE_MAX=16
+      - EXECUTIONS_TIMEOUT=3600
+      - EXECUTIONS_TIMEOUT_MAX=7200
+      
+      # Pass through API keys from .env
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - SERPAPI_KEY=${SERPAPI_KEY}
+      - RAPIDAPI_KEY=${RAPIDAPI_KEY}
+      - GOOGLE_SERVICE_ACCOUNT_EMAIL=${GOOGLE_SERVICE_ACCOUNT_EMAIL}
+      - GOOGLE_SHEET_ID=${GOOGLE_SHEET_ID}
+      
+      # Job search parameters (customize these)
+      - JOB_ROLE=Software Development Engineer
+      - JOB_EXPERIENCE=1.5
+      - JOB_SALARY_MIN=12
+      - JOB_SALARY_MAX=15
+      - JOB_LOCATION=India
+      - JOB_KEYWORDS=SDE,Software Engineer,Full Stack,React,Next.js,Node.js
+      
+    volumes:
+      # Persistent n8n data
+      - ./n8n_data:/home/node/.n8n
+      
+      # Mount credentials directory
+      - ./credentials:/credentials:ro
+      
+      # Mount resumes directory
+      - ./resumes:/resumes:ro
+      
+      # Mount workflows for easy import/export
+      - ./workflows:/workflows
+      
+    networks:
+      - job-agent-network
+    
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  job-agent-network:
+    driver: bridge
+
+volumes:
+  n8n_data:
+    driver: local
