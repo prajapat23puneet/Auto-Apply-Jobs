@@ -1,0 +1,749 @@
+{
+  "name": "Daily Job Agent - Complete System",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * *"
+            }
+          ]
+        }
+      },
+      "id": "cron-trigger",
+      "name": "Schedule: Every Day at 9 AM IST",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 320]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "jobRole",
+              "value": "={{ $env.JOB_ROLE || 'Software Development Engineer' }}"
+            },
+            {
+              "name": "experience",
+              "value": "={{ $env.JOB_EXPERIENCE || '1.5' }}"
+            },
+            {
+              "name": "salaryMin",
+              "value": "={{ $env.JOB_SALARY_MIN || '12' }}"
+            },
+            {
+              "name": "salaryMax",
+              "value": "={{ $env.JOB_SALARY_MAX || '15' }}"
+            },
+            {
+              "name": "location",
+              "value": "={{ $env.JOB_LOCATION || 'India' }}"
+            },
+            {
+              "name": "keywords",
+              "value": "={{ $env.JOB_KEYWORDS || 'Software Engineer,Full Stack,React,Node.js' }}"
+            },
+            {
+              "name": "today",
+              "value": "={{ new Date().toISOString().split('T')[0] }}"
+            },
+            {
+              "name": "timestamp",
+              "value": "={{ new Date().toISOString() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "init-vars",
+      "name": "Initialize Variables",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [460, 320]
+    },
+    {
+      "parameters": {
+        "url": "=https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords={{ encodeURIComponent($node['Initialize Variables'].json['keywords']) }}&location={{ encodeURIComponent($node['Initialize Variables'].json['location']) }}&f_E=2&f_TPR=r604800&start=0",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "linkedin-rss",
+      "name": "LinkedIn Jobs RSS",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1,
+      "position": [680, 200]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://serpapi.com/search",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "serpApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "engine",
+              "value": "google_jobs"
+            },
+            {
+              "name": "q",
+              "value": "={{ $node['Initialize Variables'].json['jobRole'] }} {{ $node['Initialize Variables'].json['location'] }}"
+            },
+            {
+              "name": "hl",
+              "value": "en"
+            },
+            {
+              "name": "api_key",
+              "value": "={{ $env.SERPAPI_KEY }}"
+            },
+            {
+              "name": "chips",
+              "value": "date_posted:week"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "serp-api",
+      "name": "Google Jobs (SerpAPI)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 320],
+      "notesInFlow": true,
+      "notes": "Optional: Uses 1 of 100 free monthly searches"
+    },
+    {
+      "parameters": {
+        "url": "https://www.naukri.com/software-development-engineer-jobs-in-india",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "naukri-scrape",
+      "name": "Naukri Jobs (Backup)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 440],
+      "notesInFlow": true,
+      "notes": "Backup source - needs HTML parsing"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "multiplex"
+      },
+      "id": "merge-sources",
+      "name": "Merge Job Sources",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.1,
+      "position": [900, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalize and deduplicate jobs from all sources\nconst allJobs = [];\nconst seenUrls = new Set();\nconst today = new Date().toISOString().split('T')[0];\n\n// Process all input items\nfor (const item of $input.all()) {\n  let jobs = [];\n  \n  try {\n    // LinkedIn RSS format\n    if (item.json.title && item.json.link) {\n      jobs = [{\n        title: item.json.title || '',\n        company: item.json.creator || item.json['dc:creator'] || 'Unknown',\n        location: item.json.location || 'India',\n        url: item.json.link || '',\n        description: item.json.contentSnippet || item.json.content || item.json.description || '',\n        salary: '',\n        source: 'LinkedIn',\n        posted_date: item.json.pubDate || item.json.isoDate || today\n      }];\n    }\n    // SerpAPI Google Jobs format\n    else if (item.json.jobs_results) {\n      jobs = item.json.jobs_results.map(job => ({\n        title: job.title || '',\n        company: job.company_name || '',\n        location: job.location || '',\n        url: job.share_url || job.related_links?.[0]?.link || '',\n        description: job.description || '',\n        salary: job.detected_extensions?.salary || '',\n        source: 'Google Jobs',\n        posted_date: job.detected_extensions?.posted_at || today\n      }));\n    }\n    // Generic format (fallback)\n    else if (item.json.title) {\n      jobs = [{\n        title: item.json.title || '',\n        company: item.json.company || item.json.company_name || '',\n        location: item.json.location || '',\n        url: item.json.url || item.json.link || '',\n        description: item.json.description || '',\n        salary: item.json.salary || '',\n        source: item.json.source || 'Other',\n        posted_date: item.json.posted_date || item.json.date || today\n      }];\n    }\n  } catch (error) {\n    console.log('Error processing item:', error);\n    continue;\n  }\n  \n  // Add jobs to collection, filtering duplicates and invalid entries\n  for (const job of jobs) {\n    // Skip if missing essential fields\n    if (!job.url || !job.title || !job.company) continue;\n    \n    // Skip duplicates\n    if (seenUrls.has(job.url)) continue;\n    seenUrls.add(job.url);\n    \n    // Basic filtering - must be software/SDE related\n    const titleLower = job.title.toLowerCase();\n    const descLower = job.description.toLowerCase();\n    \n    const relevantKeywords = [\n      'software', 'developer', 'engineer', 'sde', 'full stack',\n      'frontend', 'backend', 'react', 'node', 'javascript', 'java'\n    ];\n    \n    const isRelevant = relevantKeywords.some(keyword => \n      titleLower.includes(keyword) || descLower.includes(keyword)\n    );\n    \n    if (isRelevant) {\n      // Add metadata\n      job.found_date = today;\n      job.processed = false;\n      allJobs.push(job);\n    }\n  }\n}\n\n// Sort by posted date (newest first)\nallJobs.sort((a, b) => {\n  const dateA = new Date(a.posted_date);\n  const dateB = new Date(b.posted_date);\n  return dateB - dateA;\n});\n\n// Limit to top 20 jobs to stay within API limits\nconst limitedJobs = allJobs.slice(0, 20);\n\nconsole.log(`Found ${allJobs.length} total jobs, processing ${limitedJobs.length}`);\n\nif (limitedJobs.length === 0) {\n  return [{ json: { message: 'No jobs found today', jobs_found: 0 } }];\n}\n\nreturn limitedJobs.map(job => ({ json: job }));"
+      },
+      "id": "filter-dedupe",
+      "name": "Filter & Deduplicate Jobs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 320]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "loop-jobs",
+      "name": "Loop Through Jobs",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1340, 320]
+    },
+    {
+      "parameters": {
+        "amount": 1,
+        "unit": "seconds"
+      },
+      "id": "wait-rate-limit",
+      "name": "Wait (Rate Limit)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1560, 320],
+      "webhookId": "rate-limit-wait",
+      "notesInFlow": true,
+      "notes": "Prevents hitting Gemini rate limits"
+    },
+    {
+      "parameters": {
+        "filePath": "/resumes/master-resume.pdf",
+        "options": {}
+      },
+      "id": "read-resume",
+      "name": "Read Master Resume",
+      "type": "n8n-nodes-base.readBinaryFile",
+      "typeVersion": 1,
+      "position": [1780, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract text from PDF resume\ntry {\n  const pdfParse = require('pdf-parse');\n  \n  const resumeBinary = $binary.data;\n  if (!resumeBinary) {\n    throw new Error('No resume binary data found');\n  }\n  \n  const resumeBuffer = Buffer.from(resumeBinary.data, 'base64');\n  const pdfData = await pdfParse(resumeBuffer);\n  const resumeText = pdfData.text;\n  \n  // Limit to 8000 chars to stay within API limits\n  const truncatedResume = resumeText.substring(0, 8000);\n  \n  return {\n    json: {\n      ...($json),\n      resumeText: truncatedResume,\n      resumeLength: resumeText.length\n    }\n  };\n} catch (error) {\n  console.error('Error extracting resume text:', error);\n  \n  // Fallback: create placeholder resume text\n  return {\n    json: {\n      ...($json),\n      resumeText: `Software Development Engineer with 1.5 years of experience in Full Stack Development.\n      \nSkills: React, Node.js, JavaScript, TypeScript, MongoDB, PostgreSQL, Git, Docker\n      \nExperience: Worked on building scalable web applications using modern frameworks.\n      \nEducation: Bachelor's in Computer Science\n      \nLocation: Indore, India`,\n      resumeLength: 0,\n      error: 'Using fallback resume text'\n    }\n  };\n}"
+      },
+      "id": "extract-resume-text",
+      "name": "Extract Resume Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 320]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={{ $env.GEMINI_API_KEY }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParameters": {
+          "parameters": []
+        },
+        "jsonBody": "={{ \n  {\n    \"contents\": [{\n      \"parts\": [{\n        \"text\": `You are an expert resume optimizer for Software Development Engineer positions in India.\n\nMASTER RESUME:\n${$json.resumeText}\n\nJOB DESCRIPTION:\nTitle: ${$json.title}\nCompany: ${$json.company}\nLocation: ${$json.location}\nSalary: ${$json.salary || 'Not specified'}\nDescription: ${$json.description}\n\nTASK:\nAnalyze this job against the resume and provide:\n1. ATS (Applicant Tracking System) match score (0-100)\n2. List of matched skills from the resume that align with the JD\n3. List of skills mentioned in JD but missing from resume\n4. A tailored 2-3 sentence professional summary optimized for this role\n5. Top 3 key achievements from resume to highlight for this job\n6. Brief recommendation on what to emphasize in application\n\nIMPORTANT: Return ONLY valid JSON with this exact structure (no markdown, no code blocks):\n{\n  \"matched_skills\": [\"skill1\", \"skill2\", \"skill3\"],\n  \"missing_skills\": [\"skill4\", \"skill5\"],\n  \"ats_score\": 85,\n  \"tailored_summary\": \"Your optimized summary here\",\n  \"key_achievements\": [\"achievement 1\", \"achievement 2\", \"achievement 3\"],\n  \"recommended_focus\": \"Brief advice on what to emphasize in the application\"\n}`\n      }]\n    }],\n    \"generationConfig\": {\n      \"temperature\": 0.3,\n      \"topK\": 32,\n      \"topP\": 1,\n      \"maxOutputTokens\": 2048\n    }\n  }\n}}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "gemini-analyze",
+      "name": "Gemini: Analyze Job Match",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2220, 320],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notesInFlow": true,
+      "notes": "AI-powered resume analysis"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Gemini response and handle errors gracefully\ntry {\n  const response = $json;\n  \n  // Check if Gemini returned an error\n  if (response.error) {\n    console.error('Gemini API error:', response.error);\n    throw new Error(response.error.message || 'Gemini API error');\n  }\n  \n  const geminiResponse = response.candidates?.[0]?.content?.parts?.[0]?.text;\n  \n  if (!geminiResponse) {\n    throw new Error('No response from Gemini API');\n  }\n  \n  // Remove markdown code blocks if present\n  let cleanJson = geminiResponse\n    .replace(/```json\\n?/g, '')\n    .replace(/```\\n?/g, '')\n    .trim();\n  \n  // Sometimes Gemini adds extra text, try to extract JSON\n  const jsonMatch = cleanJson.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    cleanJson = jsonMatch[0];\n  }\n  \n  let tailoredContent;\n  try {\n    tailoredContent = JSON.parse(cleanJson);\n  } catch (parseError) {\n    console.error('Failed to parse Gemini response:', parseError);\n    console.error('Response was:', cleanJson);\n    \n    // Fallback structure with reasonable defaults\n    tailoredContent = {\n      matched_skills: ['JavaScript', 'React', 'Node.js'],\n      missing_skills: [],\n      ats_score: 50,\n      tailored_summary: 'Software Development Engineer with Full Stack experience',\n      key_achievements: [\n        'Developed web applications',\n        'Worked with modern tech stack',\n        'Team collaboration'\n      ],\n      recommended_focus: 'Highlight relevant technical skills and experience'\n    };\n  }\n  \n  // Validate the structure\n  if (!tailoredContent.matched_skills) tailoredContent.matched_skills = [];\n  if (!tailoredContent.missing_skills) tailoredContent.missing_skills = [];\n  if (!tailoredContent.ats_score) tailoredContent.ats_score = 0;\n  if (!tailoredContent.tailored_summary) tailoredContent.tailored_summary = '';\n  if (!tailoredContent.key_achievements) tailoredContent.key_achievements = [];\n  \n  return {\n    json: {\n      ...($json),\n      tailoredResume: tailoredContent,\n      processed_at: new Date().toISOString(),\n      gemini_success: true\n    }\n  };\n  \n} catch (error) {\n  console.error('Error in Gemini parsing:', error);\n  \n  // Return with fallback data so workflow continues\n  return {\n    json: {\n      ...($json),\n      tailoredResume: {\n        matched_skills: [],\n        missing_skills: [],\n        ats_score: 0,\n        tailored_summary: 'Error: Could not analyze job match',\n        key_achievements: [],\n        recommended_focus: 'Manual review required'\n      },\n      processed_at: new Date().toISOString(),\n      gemini_success: false,\n      error: error.message\n    }\n  };\n}"
+      },
+      "id": "parse-gemini",
+      "name": "Parse Gemini Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2440, 320]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false
+          },
+          "conditions": [
+            {
+              "id": "should-search-recruiter",
+              "leftValue": "={{ $json.tailoredResume.ats_score }}",
+              "rightValue": 60,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combineOperation": "all"
+        },
+        "options": {}
+      },
+      "id": "check-ats-score",
+      "name": "Check ATS Score",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2660, 320],
+      "notesInFlow": true,
+      "notes": "Only search recruiter if ATS > 60%"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://serpapi.com/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "engine",
+              "value": "google"
+            },
+            {
+              "name": "q",
+              "value": "={{ $json.company }} recruiter software engineer site:linkedin.com"
+            },
+            {
+              "name": "api_key",
+              "value": "={{ $env.SERPAPI_KEY }}"
+            },
+            {
+              "name": "num",
+              "value": "5"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "search-recruiter",
+      "name": "Search for Recruiter",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2880, 220],
+      "notesInFlow": true,
+      "notes": "Only for high-match jobs (ATS > 60%)"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract recruiter info using Gemini AI\ntry {\n  const searchResults = $json.organic_results || [];\n  \n  if (searchResults.length === 0) {\n    return {\n      json: {\n        ...($json),\n        recruiter: {\n          recruiter_name: null,\n          recruiter_title: null,\n          recruiter_email: null,\n          linkedin_url: null,\n          confidence: 'none',\n          source: 'no_results'\n        }\n      }\n    };\n  }\n  \n  const searchText = searchResults\n    .slice(0, 5)\n    .map(r => `Title: ${r.title}\\nSnippet: ${r.snippet}\\nURL: ${r.link}`)\n    .join('\\n\\n---\\n\\n');\n  \n  // Call Gemini to extract recruiter info\n  const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${$env.GEMINI_API_KEY}`;\n  \n  const response = await $http.post(geminiUrl, {\n    contents: [{\n      parts: [{\n        text: `Extract recruiter information from these LinkedIn search results for ${$json.company}:\n\n${searchText}\n\nReturn ONLY valid JSON (no markdown, no code blocks):\n{\n  \"recruiter_name\": \"Full Name or null\",\n  \"recruiter_title\": \"Job Title or null\",\n  \"recruiter_email\": \"Likely email pattern or null\",\n  \"linkedin_url\": \"LinkedIn profile URL or null\",\n  \"confidence\": \"high/medium/low\"\n}\n\nFor email, use common patterns like:\n- firstname.lastname@${$json.company.toLowerCase().replace(/[^a-z0-9]/g, '')}.com\n- first.last@${$json.company.toLowerCase().replace(/[^a-z0-9]/g, '')}.com\n- firstname@${$json.company.toLowerCase().replace(/[^a-z0-9]/g, '')}.com\n\nIf you cannot find reliable information, return null values with low confidence.`\n      }]\n    }],\n    generationConfig: {\n      temperature: 0.2,\n      maxOutputTokens: 512\n    }\n  });\n  \n  const recruiterJson = response.candidates[0].content.parts[0].text\n    .replace(/```json\\n?/g, '')\n    .replace(/```\\n?/g, '')\n    .trim();\n  \n  let recruiterInfo;\n  try {\n    recruiterInfo = JSON.parse(recruiterJson);\n    recruiterInfo.source = 'gemini_extraction';\n  } catch (parseError) {\n    console.error('Failed to parse recruiter info:', parseError);\n    recruiterInfo = {\n      recruiter_name: null,\n      recruiter_title: null,\n      recruiter_email: null,\n      linkedin_url: null,\n      confidence: 'low',\n      source: 'parse_error'\n    };\n  }\n  \n  return {\n    json: {\n      ...($json),\n      recruiter: recruiterInfo\n    }\n  };\n  \n} catch (error) {\n  console.error('Recruiter search failed:', error);\n  return {\n    json: {\n      ...($json),\n      recruiter: {\n        recruiter_name: null,\n        recruiter_title: null,\n        recruiter_email: null,\n        linkedin_url: null,\n        confidence: 'error',\n        source: 'api_error',\n        error: error.message\n      }\n    }\n  };\n}"
+      },
+      "id": "extract-recruiter",
+      "name": "Extract Recruiter with AI",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3100, 220]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "recruiter.recruiter_name",
+              "value": "Not Found"
+            },
+            {
+              "name": "recruiter.recruiter_email",
+              "value": "Not Found"
+            },
+            {
+              "name": "recruiter.confidence",
+              "value": "skipped"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "skip-recruiter",
+      "name": "Skip Recruiter Search",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [2880, 420],
+      "notesInFlow": true,
+      "notes": "Low ATS score, skip recruiter search"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "multiplex"
+      },
+      "id": "merge-recruiter-paths",
+      "name": "Merge Paths",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.1,
+      "position": [3320, 320]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.GOOGLE_SHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Sheet1",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Date": "={{ $json.found_date || new Date().toISOString().split('T')[0] }}",
+            "Company": "={{ $json.company }}",
+            "Role": "={{ $json.title }}",
+            "Salary": "={{ $json.salary || 'Not mentioned' }}",
+            "Location": "={{ $json.location }}",
+            "JD Link": "={{ $json.url }}",
+            "Recruiter Name": "={{ $json.recruiter?.recruiter_name || 'Not Found' }}",
+            "Recruiter Email": "={{ $json.recruiter?.recruiter_email || 'Not Found' }}",
+            "Status": "To Apply",
+            "ATS Score": "={{ $json.tailoredResume?.ats_score || 0 }}",
+            "Matched Skills": "={{ ($json.tailoredResume?.matched_skills || []).join(', ') }}",
+            "Notes": "=Auto-generated on {{ $json.found_date }}. Source: {{ $json.source }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "log-to-sheets",
+      "name": "Log to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [3540, 320],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-cred",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 2,
+        "unit": "seconds"
+      },
+      "id": "wait-between-jobs",
+      "name": "Wait Between Jobs",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [3760, 320],
+      "webhookId": "job-processing-wait"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-more-jobs",
+              "leftValue": "={{ $json.message }}",
+              "rightValue": "No jobs found today",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combineOperation": "any"
+        },
+        "options": {}
+      },
+      "id": "check-jobs-found",
+      "name": "Jobs Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1340, 520]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate daily summary\nconst allJobs = $input.all();\n\nif (allJobs.length === 0 || allJobs[0].json.message === 'No jobs found today') {\n  return [{\n    json: {\n      date: new Date().toISOString().split('T')[0],\n      total_jobs_found: 0,\n      jobs_processed: 0,\n      avg_ats_score: 0,\n      recruiters_found: 0,\n      high_match_jobs: 0,\n      companies: [],\n      status: 'No new jobs today'\n    }\n  }];\n}\n\nconst processedJobs = allJobs.filter(j => j.json.tailoredResume);\n\nconst summary = {\n  date: new Date().toISOString().split('T')[0],\n  total_jobs_found: allJobs.length,\n  jobs_processed: processedJobs.length,\n  avg_ats_score: Math.round(\n    processedJobs.reduce((sum, j) => sum + (j.json.tailoredResume?.ats_score || 0), 0) / \n    (processedJobs.length || 1)\n  ),\n  recruiters_found: allJobs.filter(j => \n    j.json.recruiter?.recruiter_email && \n    j.json.recruiter.recruiter_email !== 'Not Found'\n  ).length,\n  high_match_jobs: processedJobs.filter(j => \n    (j.json.tailoredResume?.ats_score || 0) >= 70\n  ).length,\n  companies: [...new Set(allJobs.map(j => j.json.company))],\n  sources: [...new Set(allJobs.map(j => j.json.source))],\n  status: 'Processing complete'\n};\n\nconsole.log('Daily Summary:', JSON.stringify(summary, null, 2));\n\nreturn [{ json: summary }];"
+      },
+      "id": "daily-summary",
+      "name": "Generate Daily Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3980, 320]
+    }
+  ],
+  "connections": {
+    "Schedule: Every Day at 9 AM IST": {
+      "main": [
+        [
+          {
+            "node": "Initialize Variables",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Variables": {
+      "main": [
+        [
+          {
+            "node": "LinkedIn Jobs RSS",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Google Jobs (SerpAPI)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Naukri Jobs (Backup)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LinkedIn Jobs RSS": {
+      "main": [
+        [
+          {
+            "node": "Merge Job Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Jobs (SerpAPI)": {
+      "main": [
+        [
+          {
+            "node": "Merge Job Sources",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Naukri Jobs (Backup)": {
+      "main": [
+        [
+          {
+            "node": "Merge Job Sources",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Merge Job Sources": {
+      "main": [
+        [
+          {
+            "node": "Filter & Deduplicate Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter & Deduplicate Jobs": {
+      "main": [
+        [
+          {
+            "node": "Jobs Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Jobs Found?": {
+      "main": [
+        [
+          {
+            "node": "Loop Through Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generate Daily Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Through Jobs": {
+      "main": [
+        [
+          {
+            "node": "Wait (Rate Limit)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait (Rate Limit)": {
+      "main": [
+        [
+          {
+            "node": "Read Master Resume",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Master Resume": {
+      "main": [
+        [
+          {
+            "node": "Extract Resume Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Resume Text": {
+      "main": [
+        [
+          {
+            "node": "Gemini: Analyze Job Match",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini: Analyze Job Match": {
+      "main": [
+        [
+          {
+            "node": "Parse Gemini Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Gemini Response": {
+      "main": [
+        [
+          {
+            "node": "Check ATS Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check ATS Score": {
+      "main": [
+        [
+          {
+            "node": "Search for Recruiter",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skip Recruiter Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search for Recruiter": {
+      "main": [
+        [
+          {
+            "node": "Extract Recruiter with AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Recruiter with AI": {
+      "main": [
+        [
+          {
+            "node": "Merge Paths",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip Recruiter Search": {
+      "main": [
+        [
+          {
+            "node": "Merge Paths",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Paths": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log to Google Sheets": {
+      "main": [
+        [
+          {
+            "node": "Wait Between Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Between Jobs": {
+      "main": [
+        [
+          {
+            "node": "Loop Through Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2026-01-15T00:00:00.000Z",
+  "versionId": "1"
+}
