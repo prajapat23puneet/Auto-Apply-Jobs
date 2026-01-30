@@ -1064,7 +1064,6 @@ Cost:                    $0.00
 [![GitHub](https://img.shields.io/badge/GitHub-prajapat23puneet-181717?logo=github)](https://github.com/prajapat23puneet)
 [![Email](https://img.shields.io/badge/Email-puneetcodes@gmail.com-D14836?logo=gmail&logoColor=white)](mailto:puneetcodes@gmail.com)
 
-📞 **Phone:** +91-7746-08-6888  
 💼 **Status:** Immediate Joiner (12-15 LPA India / 15-18K AED Dubai)
 
 **Questions?** Open an issue or DM me on LinkedIn!
