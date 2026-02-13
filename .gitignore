@@ -1,3 +1,12 @@
 .env
+.env.local
 repomix-output.xml
 .gitignore
+credentials/google-service-account.json
+.gitignore
+resumes/master-resume.pdf
+.metadata
+.log
+.aider*
+n8n_data/
+

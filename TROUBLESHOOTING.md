@@ -6,6 +6,26 @@ Common issues and solutions for the Daily Job Agent system.
 
 ## 🚨 Common Issues
 
+### 0. LinkedIn RSS Parsing Error
+
+**Symptom:** `Attribute without value Line: 14 Column: 427 Char: d`
+
+**Problem:** LinkedIn returns malformed HTML that breaks the RSS Feed Read node.
+
+**Solution (ALREADY FIXED in latest workflow):**
+
+The workflow now uses HTTP Request + custom HTML parser instead of RSS Feed Read.
+
+**To apply:**
+1. Delete old workflow
+2. Re-import `workflows/daily-job-agent-importable.json`
+
+**See detailed fix:** `FIX_LINKEDIN_RSS_ERROR.md`
+
+---
+
+## 🐛 Troubleshooting
+
 ### 1. n8n Won't Start
 
 **Symptom:** Docker container exits immediately
@@ -254,7 +274,7 @@ Solutions:
 
 ### 6. Resume PDF Not Being Read
 
-**Symptom:** "File not found" or "Cannot read PDF"
+**Symptom:** "File not found" or "Cannot read PDF" or "Access to the file is not allowed"
 
 **Diagnosis:**
 ```bash
@@ -264,11 +284,39 @@ ls -la resumes/master-resume.pdf
 # Verify it's a valid PDF
 file resumes/master-resume.pdf
 # Should output: PDF document
+
+# Check inside container
+docker-compose exec n8n ls -la /home/node/.n8n-files/resumes/
 ```
 
 **Solutions:**
 
-**A) File doesn't exist**
+**A) File Access Error (Most Common)**
+```
+Error: Access to the file is not allowed. Allowed paths: /home/node/.n8n-files
+```
+
+**Fix:** The file path must be inside n8n's allowed directory.
+
+1. **Check docker-compose.yml has correct volume mount:**
+   ```yaml
+   volumes:
+     - ./resumes:/home/node/.n8n-files/resumes:ro
+   ```
+
+2. **Update workflow file path to:**
+   ```
+   /home/node/.n8n-files/resumes/master-resume.pdf
+   ```
+
+3. **Restart n8n:**
+   ```bash
+   docker-compose restart
+   ```
+
+**See detailed fix guide:** `FIX_FILE_ACCESS_ERROR.md`
+
+**B) File doesn't exist**
 ```bash
 # Create the directory
 mkdir -p resumes
@@ -280,13 +328,34 @@ cp ~/Downloads/your-resume.pdf resumes/master-resume.pdf
 ls -la resumes/
 ```
 
-**B) Permission denied**
+**B) File doesn't exist**
+```bash
+# Create the directory
+mkdir -p resumes
+
+# Copy your resume
+cp ~/Documents/your-resume.pdf resumes/master-resume.pdf
+
+# Verify
+ls -la resumes/
+```
+
+**C) Permission denied**
 ```bash
 # Fix permissions
 chmod 644 resumes/master-resume.pdf
 ```
 
-**C) Corrupted PDF**
+**C) Permission denied**
+```bash
+# Fix permissions
+chmod 644 resumes/master-resume.pdf
+
+# Restart container
+docker-compose restart
+```
+
+**D) Corrupted PDF**
 ```bash
 # Test PDF validity
 pdfinfo resumes/master-resume.pdf
@@ -295,7 +364,16 @@ pdfinfo resumes/master-resume.pdf
 # Or use online PDF repair tool
 ```
 
-**D) Volume mount issue**
+**D) Corrupted PDF**
+```bash
+# Test PDF validity
+pdfinfo resumes/master-resume.pdf
+
+# If corrupted, re-export from source
+# Or use online PDF repair tool
+```
+
+**E) Volume mount issue**
 ```bash
 # Check if volume is mounted correctly
 docker-compose exec n8n ls -la /resumes
@@ -698,7 +776,982 @@ const duration = (endTime - startTime) / 1000;
 
 console.log(`Processed in ${duration} seconds`);
 ```
+# 🔧 Quick Fix: LinkedIn Response Format Error
+
+## Problem
+```
+Response body is not valid JSON. Change "Response Format" to "String"
+```
+
+OR
+
+```
+Attribute without value Line: 14 Column: 427 Char: d
+```
+
+These errors occur when LinkedIn returns HTML instead of JSON, or malformed HTML/XML.
+
+## ✅ Solution
+
+The issue is **ALREADY FIXED** in the latest workflow JSON file.
+
+### What Was Changed:
+
+**1. Response Format Set to String:**
+
+```json
+{
+  "options": {
+    "response": {
+      "response": {
+        "neverError": true,
+        "fullResponse": false,
+        "responseFormat": "string"  // Changed from default "json"
+      }
+    }
+  }
+}
+```
+
+**2. Improved HTML Parser:**
+
+The parser now handles multiple response formats:
+- `$input.item.json.data`
+- `$input.item.json.body`
+- `$input.item.json.response`
+- `$input.item.json` (direct string)
 
 ---
+
+## 🚀 How to Apply the Fix
+
+### If you haven't imported the workflow yet:
+You're good! Just import `workflows/daily-job-agent-importable.json` normally.
+
+### If you already have the workflow:
+
+**Option 1: Re-import (Easiest)**
+```bash
+# In n8n:
+1. Delete the old workflow
+2. Import workflows/daily-job-agent-importable.json
+3. Reconfigure Google Sheets credential
+4. Test
+```
+
+**Option 2: Manual Fix (Keep your settings)**
+
+1. **Delete the "LinkedIn Jobs RSS" node** (if it exists)
+
+2. **Add new "HTTP Request" node:**
+   - Name: `LinkedIn Jobs (HTTP)`
+   - Method: GET
+   - URL: 
+   ```
+   https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords={{ encodeURIComponent($node['Initialize Variables'].json['keywords']) }}&location={{ encodeURIComponent($node['Initialize Variables'].json['location']) }}&f_E=2&f_TPR=r604800&start=0
+   ```
+   - **IMPORTANT:** Options → Response → Response Format: `String` (not JSON!)
+   - Options → Response → Never Error: `true`
+   - Options → Response → Full Response: `false`
+
+3. **Add "Code" node after it:**
+   - Name: `Parse LinkedIn HTML`
+   - Copy the JavaScript code from the workflow JSON file
+   - Look for the node with id: `linkedin-parse`
+
+4. **Connect the nodes:**
+   ```
+   Extract Resume Text (Once) 
+     → LinkedIn Jobs (HTTP) 
+     → Parse LinkedIn HTML 
+     → Merge Job Sources
+   ```
+
+5. **Save and test**
+
+---
+
+## 🎯 Why This Happens
+
+LinkedIn's job search endpoint sometimes returns:
+- Malformed HTML attributes (missing quotes)
+- Incomplete attribute values
+- Invalid XML/HTML structure
+
+The RSS Feed Read node uses strict XML parsing which fails on these issues.
+
+Our solution:
+- ✅ Uses HTTP Request (gets raw HTML)
+- ✅ Custom Cheerio parser (more forgiving)
+- ✅ Error handling (workflow continues on failure)
+- ✅ Fallback parsing logic (tries multiple selectors)
+
+---
+
+## ✅ Verification
+
+After applying the fix:
+
+1. **Test the LinkedIn nodes:**
+   - Click on "LinkedIn Jobs (HTTP)" node
+   - Click "Execute Node"
+   - Should return raw HTML
+
+2. **Test the parser:**
+   - Click on "Parse LinkedIn HTML" node
+   - Click "Execute Node"
+   - Should return structured job data
+
+3. **Check output:**
+   ```json
+   {
+     "title": "Software Development Engineer",
+     "company": "Company Name",
+     "location": "India",
+     "url": "https://linkedin.com/...",
+     "source": "LinkedIn"
+   }
+   ```
+
+---
+
+## 🔍 Alternative Solutions
+
+### Option A: Use Different LinkedIn URL
+
+Try the LinkedIn API endpoint directly:
+```
+https://www.linkedin.com/jobs/api/seeMoreJobPostings/search
+```
+
+### Option B: Use LinkedIn RSS (if they fix it)
+
+If LinkedIn fixes their HTML, you can switch back to RSS:
+```xml
+https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=...&f_TPR=r604800
+```
+
+### Option C: Skip LinkedIn (use alternatives)
+
+If LinkedIn keeps failing:
+1. Rely on SerpAPI (Google Jobs)
+2. Use Naukri.com
+3. Add Indeed RSS feed
+4. Add other job boards
+
+---
+
+## 🐛 Still Getting Errors?
+
+### Error: "No jobs found"
+
+**Possible causes:**
+1. LinkedIn changed their HTML structure
+2. No jobs match your criteria
+3. LinkedIn is rate-limiting
+
+**Debug:**
+```javascript
+// In "Parse LinkedIn HTML" node, add console.log:
+console.log('HTML length:', html.length);
+console.log('First 500 chars:', html.substring(0, 500));
+```
+
+### Error: "Cheerio is not defined"
+
+Cheerio should be available in n8n by default. If not:
+- Restart n8n container: `docker-compose restart`
+- Check n8n version: Update to latest
+
+### Error: "Cannot read property 'json'"
+
+The HTTP request might be returning different format. Update:
+```javascript
+const html = $input.item.json.data || 
+             $input.item.json.body || 
+             $input.item.json.response || 
+             '';
+```
+
+---
+
+## 💡 Pro Tips
+
+### 1. Fallback Job Sources
+
+Don't rely only on LinkedIn. The workflow has:
+- ✅ Google Jobs (SerpAPI) - More reliable
+- ✅ Naukri.com - India-focused
+- ✅ Easy to add more sources
+
+### 2. Monitor Execution Logs
+
+```bash
+# Check n8n logs for LinkedIn errors
+docker-compose logs -f n8n | grep -i linkedin
+```
+
+### 3. Test Individual Nodes
+
+Always test nodes individually before running full workflow:
+- Click node → Execute Node → Check output
+
+### 4. Update Workflow Regularly
+
+LinkedIn changes their HTML frequently. Check for workflow updates.
+
+---
+
+## 📚 Related Documentation
+
+- n8n HTTP Request: https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.httprequest/
+- Cheerio Documentation: https://cheerio.js.org/
+- LinkedIn Job Search API: (Unofficial, subject to change)
+
+---
+
+## 🎉 Success Indicators
+
+After fix is applied:
+
+- ✅ "LinkedIn Jobs (HTTP)" returns HTML (not error)
+- ✅ "Parse LinkedIn HTML" returns job objects
+- ✅ Workflow continues even if LinkedIn fails
+- ✅ Google Sheet shows jobs from all sources
+
+---
+
+**This fix is already applied in the latest workflow file!** 🚀
+
+Just re-import `workflows/daily-job-agent-importable.json` and you're good to go!
+---
+
+# 🔧 Quick Fix: Cheerio Module Disallowed Error
+
+## Problem
+```
+Module 'cheerio' is disallowed [line 2]
+```
+
+This error occurs in the "Parse LinkedIn HTML" or "Parse Naukri Job Data" nodes when trying to use the Cheerio library.
+
+## ✅ Solution
+
+The issue is **ALREADY FIXED** in the latest workflow JSON file.
+
+### What Was Wrong:
+
+**Before (❌ Used Cheerio - Not allowed in n8n):**
+```javascript
+const cheerio = require('cheerio');  // ❌ DISALLOWED
+const $ = cheerio.load(html);
+$('.title').text();  // Won't work
+```
+
+### What Was Changed:
+
+**After (✅ Uses Regex - Built-in JavaScript):**
+```javascript
+// No external libraries needed!
+const titleMatch = html.match(/class="[^"]*title[^"]*"[^>]*>([^<]+)</i);
+const title = titleMatch ? titleMatch[1].trim() : '';
+```
+
+---
+
+## 🏗️ New Architecture
+
+### LinkedIn Jobs Processing:
+
+**1. HTTP Request** → **2. HTML Extract** → **3. Regex Parser**
+
+```
+LinkedIn Jobs (HTTP)
+  ↓ (Returns full HTML as string)
+Extract LinkedIn Job Cards (HTML node)
+  ↓ (Extracts <li> elements as array)
+Parse LinkedIn Jobs (Code node with regex)
+  ↓ (Structured job data)
+Merge Job Sources
+```
+
+### Naukri Jobs Processing:
+
+**1. HTTP Request** → **2. HTML Extract** → **3. Regex Parser**
+
+```
+Naukri.com Scrape
+  ↓ (Returns full HTML)
+Extract Naukri Jobs (HTML node)
+  ↓ (Extracts <article> elements)
+Parse Naukri Job Data (Code node with regex)
+  ↓ (Structured job data)
+Merge Job Sources
+```
+
+---
+
+## 🚀 How to Apply the Fix
+
+### If you haven't imported the workflow yet:
+You're good! Just import `workflows/daily-job-agent-importable.json` normally.
+
+### If you already have the workflow:
+
+**Option 1: Re-import (Recommended)**
+```bash
+# In n8n UI:
+1. Delete the old workflow
+2. Import workflows/daily-job-agent-importable.json
+3. Reconfigure Google Sheets credential
+4. Test each job source node
+5. Done!
+```
+
+**Option 2: Manual Fix**
+
+For **LinkedIn**:
+
+1. Keep "LinkedIn Jobs (HTTP)" as is
+
+2. Add **"HTML Extract" node** after it:
+   - Name: `Extract LinkedIn Job Cards`
+   - Data Property Name: `data`
+   - Extraction Values:
+     - Key: `jobs`
+     - CSS Selector: `li`
+     - Return Array: `true`
+     - Return Value: `html`
+
+3. Replace the Code node with regex-based parsing:
+   - Copy the JavaScript from the workflow JSON
+   - Look for node id: `linkedin-parse`
+
+4. Connect: `LinkedIn Jobs (HTTP)` → `Extract LinkedIn Job Cards` → `Parse LinkedIn Jobs` → `Merge Job Sources`
+
+For **Naukri**:
+
+1. Keep "Naukri.com Scrape" and "Extract Naukri Jobs" as is
+
+2. Update "Parse Naukri Job Data" code:
+   - Remove `const cheerio = require('cheerio');`
+   - Replace with regex-based parsing from the workflow JSON
+
+---
+
+## 🎯 Why This Happened
+
+### n8n Security Restrictions
+
+n8n **blocks** external modules in Code nodes for security:
+- ❌ `require('cheerio')` - Blocked
+- ❌ `require('axios')` - Blocked
+- ❌ `require('lodash')` - Blocked
+- ✅ Built-in JavaScript - Allowed
+- ✅ `require('crypto')` - Allowed (built-in)
+
+### Why Cheerio Was Used Initially
+
+Cheerio is great for HTML parsing in Node.js:
+```javascript
+$('.title').text()  // Easy and clean
+```
+
+But it's not available in n8n's Code nodes.
+
+### Our Solution
+
+**Use n8n's built-in HTML node + Regex:**
+
+1. **HTML Extract node** - Extracts elements using CSS selectors
+2. **Code node with regex** - Parses the extracted HTML
+
+This combination is:
+- ✅ Allowed by n8n
+- ✅ No external dependencies
+- ✅ Works reliably
+- ✅ Fast enough for our needs
+
+---
+
+## 📋 Regex Pattern Examples
+
+Our solution uses regex to extract data from HTML:
+
+### Extract Title:
+```javascript
+const titleMatch = html.match(/<h3[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)<\/h3>/i);
+const title = titleMatch ? titleMatch[1].trim() : '';
+```
+
+### Extract URL:
+```javascript
+const urlMatch = html.match(/href="(https:\/\/[^"]*linkedin\.com\/jobs[^"]*)"/i);
+const url = urlMatch ? urlMatch[1] : '';
+```
+
+### Extract Company:
+```javascript
+const companyMatch = html.match(/<h4[^>]*>([^<]+)<\/h4>/i);
+const company = companyMatch ? companyMatch[1].trim() : 'Unknown';
+```
+
+### Clean HTML Entities:
+```javascript
+const cleanText = text
+  .replace(/&amp;/g, '&')
+  .replace(/&lt;/g, '<')
+  .replace(/&gt;/g, '>')
+  .replace(/&quot;/g, '"')
+  .replace(/&#39;/g, "'")
+  .replace(/\s+/g, ' ')
+  .trim();
+```
+
+---
+
+## ✅ Verification
+
+After applying the fix, test each node:
+
+### Test 1: LinkedIn HTTP Request
+```bash
+Execute "LinkedIn Jobs (HTTP)"
+✅ Should return HTML string (not error)
+```
+
+### Test 2: Extract LinkedIn Job Cards
+```bash
+Execute "Extract LinkedIn Job Cards"
+✅ Should return array of HTML strings (job cards)
+```
+
+### Test 3: Parse LinkedIn Jobs
+```bash
+Execute "Parse LinkedIn Jobs"
+✅ Should return structured job objects:
+[
+  {
+    "title": "Software Engineer",
+    "company": "Company Name",
+    "url": "https://...",
+    "source": "LinkedIn"
+  }
+]
+```
+
+### Test 4: Full Workflow
+```bash
+Execute entire workflow
+✅ Google Sheet should populate with jobs from all sources
+```
+
+---
+
+## 🐛 Troubleshooting
+
+### No jobs extracted
+
+**Possible causes:**
+1. LinkedIn/Naukri changed their HTML structure
+2. CSS selectors don't match
+3. No jobs available for your criteria
+
+**Debug:**
+```javascript
+// Add to Parse node:
+console.log('HTML cards found:', jobsHtml.length);
+console.log('First card preview:', jobsHtml[0]?.substring(0, 200));
+```
+
+### Regex not matching
+
+**Update the regex patterns:**
+
+LinkedIn changes their class names frequently. You may need to:
+1. View page source of LinkedIn jobs page
+2. Identify new class names
+3. Update regex patterns in the Code node
+
+Example:
+```javascript
+// If LinkedIn now uses 'job-card-title' instead of 'title':
+const titleMatch = html.match(/class="[^"]*job-card-title[^"]*"[^>]*>([^<]+)</i);
+```
+
+### Still getting cheerio error
+
+**Check you're using the latest workflow:**
+```bash
+# Verify workflow version
+grep -i "cheerio" workflows/daily-job-agent-importable.json
+
+# Should return: (empty - no matches)
+```
+
+If you see "cheerio" in the file, re-download the latest version.
+
+---
+
+## 💡 Alternative: Use n8n's Built-in Nodes
+
+If regex seems complex, you can use n8n's native nodes:
+
+### Option A: Multiple HTML Extract Nodes
+```
+HTML Extract (get titles) ─┐
+HTML Extract (get companies) ├─→ Merge → Code (combine)
+HTML Extract (get URLs) ─────┘
+```
+
+### Option B: Set Multiple Values Node
+After HTML Extract, use "Set" node to restructure data.
+
+---
+
+## 📚 Allowed Modules in n8n
+
+What **IS** allowed in n8n Code nodes:
+
+### Built-in Node.js Modules:
+- ✅ `crypto` - Encryption/hashing
+- ✅ `url` - URL parsing
+- ✅ `querystring` - Query string parsing
+- ✅ `buffer` - Binary data
+- ✅ `util` - Utilities
+
+### JavaScript Built-ins:
+- ✅ `Date`, `Array`, `Object`, `String`, `Number`
+- ✅ `Math`, `RegExp`, `JSON`
+- ✅ `Promise`, `async/await`
+- ✅ `Map`, `Set`, `WeakMap`, `WeakSet`
+
+### What's NOT Allowed:
+- ❌ `cheerio` (HTML parsing)
+- ❌ `axios` (HTTP requests - use HTTP Request node)
+- ❌ `lodash` (utilities - use native JS)
+- ❌ `moment` (dates - use native Date)
+- ❌ Most npm packages
+
+---
+
+## 🎉 Benefits of the Fix
+
+- ✅ **No dependencies** - Pure JavaScript
+- ✅ **Faster** - No library overhead
+- ✅ **More reliable** - No external package issues
+- ✅ **Compliant** - Works within n8n's restrictions
+- ✅ **Maintainable** - Easy to update regex patterns
+
+---
+
+## 📖 Learn More
+
+- **n8n Code Node:** https://docs.n8n.io/code-examples/methods-variables-examples/
+- **JavaScript Regex:** https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Regular_Expressions
+- **HTML Parsing with Regex:** When to use and when to avoid
+
+---
+
+**This fix is already applied in the latest workflow!** 🚀
+
+Just re-import `workflows/daily-job-agent-importable.json` and you're good to go!
+
+---
+
+## 🎯 Summary
+
+| Issue | Solution |
+|-------|----------|
+| Cheerio not allowed | Use regex + HTML Extract node |
+| Complex HTML parsing | Split into HTML Extract → Code |
+| Multiple dependencies | Pure JavaScript, no imports |
+| Maintenance | Easy to update regex patterns |
+
+The new approach is **simpler, faster, and fully compliant** with n8n! 🎊
+
+# 🔧 Quick Fix: Access to ENV Vars Denied
+
+## Problem
+```
+access to env vars denied
+```
+
+This error occurs in nodes that try to access `$env.VARIABLE_NAME` directly in expression fields.
+
+## ✅ Solution
+
+The issue is **ALREADY FIXED** in the latest workflow JSON file.
+
+### What Was Wrong:
+
+**Before (❌ Direct $env access in expressions):**
+```javascript
+// In node parameters:
+"api_key": "={{ $env.SERPAPI_KEY }}"  // ❌ Denied
+"url": "...?key={{ $env.GEMINI_API_KEY }}"  // ❌ Denied
+"documentId": "={{ $env.GOOGLE_SHEET_ID }}"  // ❌ Denied
+```
+
+### What Changed:
+
+**After (✅ Access via Initialize Variables node):**
+```javascript
+// Step 1: Initialize Variables reads $env (allowed at start)
+{
+  "geminiApiKey": "={{ $env.GEMINI_API_KEY }}",  // ✅ Works here
+  "serpApiKey": "={{ $env.SERPAPI_KEY }}",
+  "googleSheetId": "={{ $env.GOOGLE_SHEET_ID }}"
+}
+
+// Step 2: Other nodes reference Initialize Variables
+"api_key": "={{ $('Initialize Variables').item.json.serpApiKey }}"  // ✅ Works
+```
+
+---
+
+## 🏗️ How It Works
+
+### The Pattern:
+
+```
+Schedule Trigger
+  ↓
+Initialize Variables (reads ALL $env variables ONCE)
+  ↓  ↓  ↓
+Other nodes reference Initialize Variables (not $env)
+```
+
+### Why This Works:
+
+1. **$env access is restricted** in most node parameter expressions for security
+2. **Initialize Variables** runs first and CAN read $env
+3. **All other nodes** get values from Initialize Variables via `$('Initialize Variables').item.json.variableName`
+
+---
+
+## 🚀 How to Apply the Fix
+
+### If you haven't imported the workflow yet:
+You're good! Just import `workflows/daily-job-agent-importable.json` normally.
+
+### If you already have the workflow:
+
+**Option 1: Re-import (Easiest)**
+```bash
+# In n8n:
+1. Delete the old workflow
+2. Import workflows/daily-job-agent-importable.json
+3. The Initialize Variables node will have all API keys
+4. Other nodes will reference it correctly
+5. Done!
+```
+
+**Option 2: Manual Fix**
+
+**Step 1: Update "Initialize Variables" node**
+
+Add these to the Set node values:
+```json
+{
+  "name": "geminiApiKey",
+  "value": "={{ $env.GEMINI_API_KEY || '' }}"
+},
+{
+  "name": "serpApiKey",
+  "value": "={{ $env.SERPAPI_KEY || '' }}"
+},
+{
+  "name": "googleSheetId",
+  "value": "={{ $env.GOOGLE_SHEET_ID || '' }}"
+}
+```
+
+**Step 2: Update "Google Jobs (SerpAPI)" node**
+
+Change the `api_key` parameter from:
+```javascript
+"={{ $env.SERPAPI_KEY }}"  // ❌ Old
+```
+
+To:
+```javascript
+"={{ $('Initialize Variables').item.json.serpApiKey || '' }}"  // ✅ New
+```
+
+**Step 3: Update "Gemini: Analyze Job Match" node**
+
+Change the URL from:
+```javascript
+"...?key={{ $env.GEMINI_API_KEY }}"  // ❌ Old
+```
+
+To:
+```javascript
+"...?key={{ $('Initialize Variables').item.json.geminiApiKey }}"  // ✅ New
+```
+
+**Step 4: Update "Log to Google Sheets" node**
+
+Change documentId value from:
+```javascript
+"{{ $env.GOOGLE_SHEET_ID }}"  // ❌ Old
+```
+
+To:
+```javascript
+"{{ $('Initialize Variables').item.json.googleSheetId }}"  // ✅ New
+```
+
+**Step 5: Update "Extract Recruiter with AI" node**
+
+In the Code node, change:
+```javascript
+const geminiUrl = `...?key=${$env.GEMINI_API_KEY}`;  // ❌ Old
+```
+
+To:
+```javascript
+const geminiApiKey = $('Initialize Variables').item.json.geminiApiKey;
+const geminiUrl = `...?key=${geminiApiKey}`;  // ✅ New
+```
+
+---
+
+## 📋 Complete Variable Reference
+
+### Environment Variables (in .env):
+```bash
+GEMINI_API_KEY=your-key-here
+SERPAPI_KEY=your-key-here
+GOOGLE_SHEET_ID=your-sheet-id
+JOB_ROLE=Software Development Engineer
+JOB_EXPERIENCE=1.5
+JOB_SALARY_MIN=12
+JOB_SALARY_MAX=15
+JOB_LOCATION=India
+JOB_KEYWORDS=SDE,Full Stack,React
+```
+
+### Initialize Variables Output:
+```json
+{
+  "jobRole": "Software Development Engineer",
+  "experience": "1.5",
+  "salaryMin": "12",
+  "salaryMax": "15",
+  "location": "India",
+  "keywords": "SDE,Full Stack,React",
+  "today": "2026-01-16",
+  "timestamp": "2026-01-16T10:30:00Z",
+  "geminiApiKey": "AIza...",
+  "serpApiKey": "abc123...",
+  "googleSheetId": "1ABC..."
+}
+```
+
+### How to Reference in Other Nodes:
+```javascript
+// Job search parameters
+$('Initialize Variables').item.json.jobRole
+$('Initialize Variables').item.json.location
+$('Initialize Variables').item.json.keywords
+
+// API keys
+$('Initialize Variables').item.json.geminiApiKey
+$('Initialize Variables').item.json.serpApiKey
+$('Initialize Variables').item.json.googleSheetId
+
+// Alternative shorter syntax (if node name is clear):
+$node['Initialize Variables'].json.jobRole
+```
+
+---
+
+## 🎯 Why $env Access is Restricted
+
+### Security Reasons:
+
+n8n restricts `$env` access in expressions to prevent:
+- ❌ Accidental exposure of secrets in logs
+- ❌ Security vulnerabilities in shared workflows
+- ❌ Credential leaks in error messages
+- ❌ Unauthorized access to sensitive data
+
+### Where $env WORKS:
+- ✅ Initialize Variables node (at workflow start)
+- ✅ Docker environment variables passed to container
+- ✅ Some trigger nodes
+
+### Where $env DOESN'T WORK:
+- ❌ HTTP Request URL parameters
+- ❌ Code node expressions
+- ❌ Google Sheets documentId
+- ❌ Most node parameter expressions
+
+---
+
+## ✅ Verification
+
+After applying the fix:
+
+### Test 1: Initialize Variables
+```bash
+Execute "Initialize Variables" node
+✅ Should output all variables including API keys
+```
+
+### Test 2: Google Jobs (SerpAPI)
+```bash
+Execute "Google Jobs (SerpAPI)" node
+✅ Should make request with API key (check URL in logs)
+✅ OR skip gracefully if key is empty
+```
+
+### Test 3: Gemini Analysis
+```bash
+Execute "Gemini: Analyze Job Match" node
+✅ Should call Gemini API successfully
+✅ Should return ATS score and analysis
+```
+
+### Test 4: Google Sheets
+```bash
+Execute "Log to Google Sheets" node
+✅ Should append row to correct sheet
+✅ Should use Sheet ID from Initialize Variables
+```
+
+---
+
+## 🐛 Troubleshooting
+
+### "Initialize Variables output is empty"
+
+**Check:**
+```bash
+# Verify .env file exists and is loaded
+docker-compose exec n8n env | grep GEMINI_API_KEY
+
+# If empty, restart container
+docker-compose restart
+```
+
+### "Cannot read property 'json' of undefined"
+
+**Issue:** Initialize Variables node name changed
+
+**Fix:**
+```javascript
+// Make sure node is named exactly:
+"Initialize Variables"
+
+// Not:
+"Init Variables"  // ❌
+"Setup Variables"  // ❌
+```
+
+### "API key is empty/undefined"
+
+**Check Initialize Variables output:**
+```javascript
+// Should see:
+{
+  "geminiApiKey": "AIza...",  // ✅ Has value
+  "serpApiKey": "",           // ⚠️  Empty but OK if optional
+  "googleSheetId": "1ABC..."  // ✅ Has value
+}
+```
+
+**If all empty:**
+- Check .env file has the variables
+- Restart Docker: `docker-compose restart`
+- Check docker-compose.yml passes environment variables
+
+### "Variables work in test but not in schedule"
+
+**Issue:** Environment variables not persisted
+
+**Fix:**
+```bash
+# Ensure .env is in the same directory as docker-compose.yml
+ls -la .env
+
+# Verify docker-compose.yml has env_file or environment section
+grep -A 5 "environment:" docker-compose.yml
+
+# Restart to reload environment
+docker-compose down && docker-compose up -d
+```
+
+---
+
+## 💡 Best Practices
+
+### 1. Always Use Initialize Variables
+
+```javascript
+// ❌ Bad: Direct $env access everywhere
+"url": "...?key={{ $env.API_KEY }}"
+
+// ✅ Good: Read once, reference many times
+Initialize Variables: "apiKey": "={{ $env.API_KEY }}"
+Other nodes: "url": "...?key={{ $('Initialize Variables').item.json.apiKey }}"
+```
+
+### 2. Provide Fallback Values
+
+```javascript
+// ✅ Good: Won't break if variable is missing
+"={{ $env.API_KEY || '' }}"
+"={{ $env.SHEET_ID || 'default-sheet-id' }}"
+```
+
+### 3. Use Consistent Naming
+
+```javascript
+// Environment variable (.env)
+GEMINI_API_KEY=...
+
+// Initialize Variables (camelCase)
+geminiApiKey
+
+// Reference in nodes
+$('Initialize Variables').item.json.geminiApiKey
+```
+
+### 4. Document Required vs Optional
+
+```javascript
+// In Initialize Variables node notes:
+// REQUIRED: geminiApiKey, googleSheetId
+// OPTIONAL: serpApiKey (workflow continues without it)
+```
+
+---
+
+## 📚 Related Documentation
+
+- **n8n Environment Variables:** https://docs.n8n.io/hosting/environment-variables/
+- **n8n Expressions:** https://docs.n8n.io/code-examples/expressions/
+- **Node References:** https://docs.n8n.io/code-examples/expressions/data-structure/
+
+---
+
+## 🎉 Benefits of This Approach
+
+| Aspect | Before | After |
+|--------|--------|-------|
+| Security | ❌ $env exposed in many places | ✅ Centralized in one node |
+| Debugging | ❌ Hard to track where variables used | ✅ Single source of truth |
+| Maintenance | ❌ Update in multiple nodes | ✅ Update in one place |
+| Testing | ❌ Can't easily override values | ✅ Can modify Initialize Variables |
+| Sharing | ❌ Credentials in workflow | ✅ Clean workflow, secrets in .env |
+
+---
+
+**This fix is already applied in the latest workflow!** 🚀
+
+Just re-import `workflows/daily-job-agent-importable.json` and all env vars will work correctly!
 
 Remember: Most issues are configuration-related. Double-check your .env file and API credentials first!
