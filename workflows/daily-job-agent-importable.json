@@ -241,6 +241,14 @@
               "value": "en"
             },
             {
+              "name": "gl",
+              "value": "in"
+            },
+            {
+              "name": "location",
+              "value": "India"
+            },
+            {
               "name": "api_key",
               "value": "={{ $('Initialize Variables').item.json.serpApiKey || '' }}"
             },
@@ -271,8 +279,20 @@
     },
     {
       "parameters": {
-        "mode": "combine",
-        "combinationMode": "multiplex"
+        "jsCode": "const items = [];\n\nfor (const item of $input.all()) {\n  const jobs = item.json.jobs_results || [];\n  \n  for (const job of jobs) {\n    items.push({\n      json: {\n        title: job.title || '',\n        company: job.company_name || '',\n        location: job.location || '',\n        url: job.share_link || (job.apply_options?.[0]?.link || ''),\n        description: job.description || '',\n        salary: job.detected_extensions?.salary || '',\n        source: 'SerpAPI',\n        posted_date: job.detected_extensions?.posted_at || new Date().toISOString()\n      }\n    });\n  }\n}\n\nreturn items;"
+      },
+      "id": "serpapi-parse",
+      "name": "Parse SerpAPI JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "append"
       },
       "id": "merge-sources",
       "name": "Merge Job Sources",
@@ -285,7 +305,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// FIX #3: Improved deduplication with URL normalization\nconst allJobs = [];\nconst seenUrls = new Set();\nconst today = new Date().toISOString().split('T')[0];\n\n// Helper function to normalize URLs\nfunction normalizeUrl(url) {\n  if (!url) return '';\n  \n  try {\n    const urlObj = new URL(url);\n    // Remove query parameters and fragments for deduplication\n    const normalized = `${urlObj.protocol}//${urlObj.host}${urlObj.pathname}`;\n    return normalized.toLowerCase().replace(/\\/$/, ''); // Remove trailing slash\n  } catch (error) {\n    // If URL parsing fails, just use lowercase without query params\n    return url.split('?')[0].split('#')[0].toLowerCase();\n  }\n}\n\n// Process all input items\nfor (const item of $input.all()) {\n  let jobs = [];\n  \n  try {\n    // LinkedIn RSS format\n    if (item.json.title && item.json.link) {\n      jobs = [{\n        title: item.json.title || '',\n        company: item.json.creator || item.json['dc:creator'] || 'Unknown',\n        location: item.json.location || 'India',\n        url: item.json.link || '',\n        description: item.json.contentSnippet || item.json.content || item.json.description || '',\n        salary: '',\n        source: 'LinkedIn',\n        posted_date: item.json.pubDate || item.json.isoDate || today\n      }];\n    }\n    // SerpAPI Google Jobs format\n    else if (item.json.jobs_results) {\n      jobs = item.json.jobs_results.map(job => ({\n        title: job.title || '',\n        company: job.company_name || '',\n        location: job.location || '',\n        url: job.share_url || job.related_links?.[0]?.link || '',\n        description: job.description || '',\n        salary: job.detected_extensions?.salary || '',\n        source: 'Google Jobs',\n        posted_date: job.detected_extensions?.posted_at || today\n      }));\n    }\n    // Naukri.com format (from our parser)\n    else if (item.json.source === 'Naukri.com') {\n      jobs = [{\n        title: item.json.title || '',\n        company: item.json.company || '',\n        location: item.json.location || '',\n        url: item.json.url || '',\n        description: item.json.description || '',\n        salary: item.json.salary || '',\n        source: 'Naukri.com',\n        posted_date: today\n      }];\n    }\n    // Generic format (fallback)\n    else if (item.json.title) {\n      jobs = [{\n        title: item.json.title || '',\n        company: item.json.company || item.json.company_name || '',\n        location: item.json.location || '',\n        url: item.json.url || item.json.link || '',\n        description: item.json.description || '',\n        salary: item.json.salary || '',\n        source: item.json.source || 'Other',\n        posted_date: item.json.posted_date || item.json.date || today\n      }];\n    }\n  } catch (error) {\n    console.log('Error processing item:', error);\n    continue;\n  }\n  \n  // Add jobs to collection with improved deduplication\n  for (const job of jobs) {\n    // Skip if missing essential fields\n    if (!job.url || !job.title || !job.company) continue;\n    \n    // FIX #3: Normalize URL before checking duplicates\n    const normalizedUrl = normalizeUrl(job.url);\n    if (!normalizedUrl) continue;\n    \n    // Skip duplicates\n    if (seenUrls.has(normalizedUrl)) {\n      console.log(`Duplicate detected: ${job.title} at ${job.company}`);\n      continue;\n    }\n    seenUrls.add(normalizedUrl);\n    \n    // Basic filtering - must be software/SDE related\n    const titleLower = job.title.toLowerCase();\n    const descLower = job.description.toLowerCase();\n    \n    const relevantKeywords = [\n      'software', 'developer', 'engineer', 'sde', 'full stack',\n      'frontend', 'backend', 'react', 'node', 'javascript', 'java',\n      'python', 'web', 'mobile', 'app'\n    ];\n    \n    const isRelevant = relevantKeywords.some(keyword => \n      titleLower.includes(keyword) || descLower.includes(keyword)\n    );\n    \n    if (isRelevant) {\n      // Add metadata\n      job.found_date = today;\n      job.processed = false;\n      job.normalized_url = normalizedUrl; // Keep for debugging\n      allJobs.push(job);\n    }\n  }\n}\n\n// Sort by posted date (newest first)\nallJobs.sort((a, b) => {\n  const dateA = new Date(a.posted_date);\n  const dateB = new Date(b.posted_date);\n  return dateB - dateA;\n});\n\n// Limit to top 20 jobs to stay within API limits\nconst limitedJobs = allJobs.slice(0, 20);\n\nconsole.log(`Total jobs found: ${allJobs.length}, Duplicates removed: ${$input.all().length - allJobs.length}, Processing: ${limitedJobs.length}`);\n\nif (limitedJobs.length === 0) {\n  return [{ json: { message: 'No jobs found today', jobs_found: 0 } }];\n}\n\nreturn limitedJobs.map(job => ({ json: job }));"
+        "jsCode": "// FIX #3: Improved deduplication with URL normalization\nconst allJobs = [];\nconst seenUrls = new Set();\nconst today = new Date().toISOString().split('T')[0];\n\n// Helper function to normalize URLs\nfunction normalizeUrl(url) {\n  if (!url) return '';\n  \n  try {\n    const urlObj = new URL(url);\n    // Remove query parameters and fragments for deduplication\n    const normalized = `${urlObj.protocol}//${urlObj.host}${urlObj.pathname}`;\n    return normalized.toLowerCase().replace(/\\/$/, ''); // Remove trailing slash\n  } catch (error) {\n    // If URL parsing fails, just use lowercase without query params\n    return url.split('?')[0].split('#')[0].toLowerCase();\n  }\n}\n\n// Process all input items\nfor (const item of $input.all()) {\n  let jobs = [];\n  \n  try {\n    // LinkedIn RSS format\n    if (item.json.title && item.json.link) {\n      jobs = [{\n        title: item.json.title || '',\n        company: item.json.creator || item.json['dc:creator'] || 'Unknown',\n        location: item.json.location || 'India',\n        url: item.json.link || '',\n        description: item.json.contentSnippet || item.json.content || item.json.description || '',\n        salary: '',\n        source: 'LinkedIn',\n        posted_date: item.json.pubDate || item.json.isoDate || today\n      }];\n    }\n    // SerpAPI Google Jobs format\n    else if (item.json.jobs_results) {\n      jobs = item.json.jobs_results.map(job => ({\n        title: job.title || '',\n        company: job.company_name || '',\n        location: job.location || '',\n        url: job.share_url || job.related_links?.[0]?.link || '',\n        description: job.description || '',\n        salary: job.detected_extensions?.salary || '',\n        source: 'Google Jobs',\n        posted_date: job.detected_extensions?.posted_at || today\n      }));\n    }\n    // Naukri.com format (from our parser)\n    else if (item.json.source === 'Naukri.com') {\n      jobs = [{\n        title: item.json.title || '',\n        company: item.json.company || '',\n        location: item.json.location || '',\n        url: item.json.url || '',\n        description: item.json.description || '',\n        salary: item.json.salary || '',\n        source: 'Naukri.com',\n        posted_date: today\n      }];\n    }\n    // Generic format (fallback)\n    else if (item.json.title) {\n      jobs = [{\n        title: item.json.title || '',\n        company: item.json.company || item.json.company_name || '',\n        location: item.json.location || '',\n        url: item.json.url || item.json.link || '',\n        description: item.json.description || '',\n        salary: item.json.salary || '',\n        source: item.json.source || 'Other',\n        posted_date: item.json.posted_date || item.json.date || today\n      }];\n    }\n  } catch (error) {\n    console.log('Error processing item:', error);\n    continue;\n  }\n  \n  // Add jobs to collection with improved deduplication\n  for (const job of jobs) {\n    // Skip if missing essential fields\n    if (!job.url || !job.title || !job.company) continue;\n    \n    // FIX #3: Normalize URL before checking duplicates\n    const normalizedUrl = normalizeUrl(job.url);\n    if (!normalizedUrl) continue;\n    \n    // Skip duplicates\n    if (seenUrls.has(normalizedUrl)) {\n      console.log(`Duplicate detected: ${job.title} at ${job.company}`);\n      continue;\n    }\n    seenUrls.add(normalizedUrl);\n    \n    // Basic filtering - must be software/SDE related\n    const titleLower = job.title.toLowerCase();\n    const descLower = job.description.toLowerCase();\n    \n    const relevantKeywords = [\n      'software', 'developer', 'engineer', 'sde', 'full stack',\n      'frontend', 'backend', 'react', 'node', 'javascript', 'java',\n      'python', 'web', 'mobile', 'app'\n    ];\n    \n    const isRelevant = relevantKeywords.some(keyword => \n      titleLower.includes(keyword) || descLower.includes(keyword)\n    );\n    \n    if (isRelevant) {\n      // Add metadata\n      job.found_date = today;\n      job.processed = false;\n      job.normalized_url = normalizedUrl; // Keep for debugging\n      allJobs.push(job);\n    }\n  }\n}\n\n// Sort by posted date (newest first)\nallJobs.sort((a, b) => {\n  const dateA = new Date(a.posted_date);\n  const dateB = new Date(b.posted_date);\n  return dateB - dateA;\n});\n\n// Limit to top 20 jobs to stay within API limits\nconst limitedJobs = allJobs.slice(0, 50);\n\nconsole.log(`Total jobs found: ${allJobs.length}, Duplicates removed: ${$input.all().length - allJobs.length}, Processing: ${limitedJobs.length}`);\n\nif (limitedJobs.length === 0) {\n  return [{ json: { message: 'No jobs found today', jobs_found: 0 } }];\n}\n\nreturn limitedJobs.map(job => ({ json: job }));"
       },
       "id": "filter-dedupe",
       "name": "Filter & Deduplicate Jobs",
@@ -760,6 +780,17 @@
       ]
     },
     "Google Jobs (SerpAPI)": {
+      "main": [
+        [
+          {
+            "node": "Parse SerpAPI JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse SerpAPI JSON": {
       "main": [
         [
           {
