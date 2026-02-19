@@ -108,6 +108,12 @@
               "name": "adzunaId",
               "value": "={{ $env.ADZUNA_ID || '' }}",
               "type": "string"
+            },
+            {
+              "id": "hunterApiKey",
+              "name": "hunterApiKey",
+              "value": "={{ $env.HUNTER_API_KEY || '' }}",
+              "type": "string"
             }
           ]
         },
@@ -388,18 +394,20 @@
             {
               "id": "resume-text-assignment",
               "name": "resumeText",
-              "value": "={{ $node['Extract Resume Text (Once)'].json.resumeText }}",
+              "value": "={{ $node['Extract Resume Text'].json.text }}",
               "type": "string"
             },
             {
               "id": "resume-extracted-flag",
               "name": "resumeExtracted",
-              "value": "={{ $node['Extract Resume Text (Once)'].json.resumeExtracted }}",
+              "value": "={{ $node['Extract Resume Text'].json.text.includes('PUNEET') }}",
               "type": "boolean"
             }
           ]
         },
-        "options": {}
+        "options": {
+          "keepOnlySet": false
+        }
       },
       "id": "add-resume-to-job",
       "name": "Add Resume to Job Data",
@@ -414,8 +422,22 @@
     },
     {
       "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const resume = $input.item.json.resumeText || ''; const title = $input.item.json.title || ''; const company = $input.item.json.company || ''; const location = $input.item.json.location || ''; const salary = $input.item.json.salary || 'Not specified'; const description = $input.item.json.description || ''; const prompt = 'You are an expert resume optimizer for Software Development Engineer positions in India.\\n\\nMASTER RESUME:\\n' + resume + '\\n\\nJOB DESCRIPTION:\\nTitle: ' + title + '\\nCompany: ' + company + '\\nLocation: ' + location + '\\nSalary: ' + salary + '\\nDescription: ' + description + '\\n\\nTASK:\\nAnalyze this job against the resume and provide:\\n1. ATS (Applicant Tracking System) match score (0-100)\\n2. List of matched skills from the resume that align with the JD\\n3. List of skills mentioned in JD but missing from resume\\n4. A tailored 2-3 sentence professional summary optimized for this role\\n5. Top 3 key achievements from resume to highlight for this job\\n6. Brief recommendation on what to emphasize in application\\n\\nIMPORTANT: Return ONLY valid JSON with this exact structure (no markdown, no code blocks):\\n{\\n  \\\"matched_skills\\\": [\\\"skill1\\\", \\\"skill2\\\", \\\"skill3\\\"],\\n  \\\"missing_skills\\\": [\\\"skill4\\\", \\\"skill5\\\"],\\n  \\\"ats_score\\\": 85,\\n  \\\"tailored_summary\\\": \\\"Your optimized summary here\\\",\\n  \\\"key_achievements\\\": [\\\"achievement 1\\\", \\\"achievement 2\\\", \\\"achievement 3\\\"],\\n  \\\"recommended_focus\\\": \\\"Brief advice on what to emphasize in the application\\\"\\n}'; return { json: { ...($input.item.json), geminiBody: { contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.3, topK: 32, topP: 1, maxOutputTokens: 1024 } } } };"
+      },
+      "id": "build-gemini-body",
+      "name": "Build Gemini Body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3050,
+        220
+      ]
+    },
+    {
+      "parameters": {
         "method": "POST",
-        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={{ $('Initialize Variables').item.json.geminiApiKey }}",
+        "url": "=https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash-lite:generateContent?key={{ $node['Initialize Variables'].json.geminiApiKey }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -427,17 +449,19 @@
         },
         "sendBody": true,
         "contentType": "json",
-        "bodyParameters": {
-          "parameters": []
-        },
-        "jsonBody": "={{ \n  {\n    \"contents\": [{\n      \"parts\": [{\n        \"text\": `You are an expert resume optimizer for Software Development Engineer positions in India.\n\nMASTER RESUME:\n${$json.resumeText}\n\nJOB DESCRIPTION:\nTitle: ${$json.title}\nCompany: ${$json.company}\nLocation: ${$json.location}\nSalary: ${$json.salary || 'Not specified'}\nDescription: ${$json.description}\n\nTASK:\nAnalyze this job against the resume and provide:\n1. ATS (Applicant Tracking System) match score (0-100)\n2. List of matched skills from the resume that align with the JD\n3. List of skills mentioned in JD but missing from resume\n4. A tailored 2-3 sentence professional summary optimized for this role\n5. Top 3 key achievements from resume to highlight for this job\n6. Brief recommendation on what to emphasize in application\n\nIMPORTANT: Return ONLY valid JSON with this exact structure (no markdown, no code blocks):\n{\n  \"matched_skills\": [\"skill1\", \"skill2\", \"skill3\"],\n  \"missing_skills\": [\"skill4\", \"skill5\"],\n  \"ats_score\": 85,\n  \"tailored_summary\": \"Your optimized summary here\",\n  \"key_achievements\": [\"achievement 1\", \"achievement 2\", \"achievement 3\"],\n  \"recommended_focus\": \"Brief advice on what to emphasize in the application\"\n}`\n      }]\n    }],\n    \"generationConfig\": {\n      \"temperature\": 0.3,\n      \"topK\": 32,\n      \"topP\": 1,\n      \"maxOutputTokens\": 2048\n    }\n  }\n}}",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.geminiBody }}",
         "options": {
           "response": {
             "response": {
               "neverError": true
             }
           },
-          "timeout": 30000
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          }
         }
       },
       "id": "gemini-analyze",
@@ -456,7 +480,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Parse Gemini response and handle errors gracefully\ntry {\n  const response = $json;\n  \n  // Check if Gemini returned an error\n  if (response.error) {\n    console.error('Gemini API error:', response.error);\n    throw new Error(response.error.message || 'Gemini API error');\n  }\n  \n  const geminiResponse = response.candidates?.[0]?.content?.parts?.[0]?.text;\n  \n  if (!geminiResponse) {\n    throw new Error('No response from Gemini API');\n  }\n  \n  // Remove markdown code blocks if present\n  let cleanJson = geminiResponse\n    .replace(/```json\\n?/g, '')\n    .replace(/```\\n?/g, '')\n    .trim();\n  \n  // Sometimes Gemini adds extra text, try to extract JSON\n  const jsonMatch = cleanJson.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    cleanJson = jsonMatch[0];\n  }\n  \n  let tailoredContent;\n  try {\n    tailoredContent = JSON.parse(cleanJson);\n  } catch (parseError) {\n    console.error('Failed to parse Gemini response:', parseError);\n    console.error('Response was:', cleanJson);\n    \n    // Fallback structure with reasonable defaults\n    tailoredContent = {\n      matched_skills: ['JavaScript', 'React', 'Node.js'],\n      missing_skills: [],\n      ats_score: 50,\n      tailored_summary: 'Software Development Engineer with Full Stack experience',\n      key_achievements: [\n        'Developed web applications',\n        'Worked with modern tech stack',\n        'Team collaboration'\n      ],\n      recommended_focus: 'Highlight relevant technical skills and experience'\n    };\n  }\n  \n  // Validate the structure\n  if (!tailoredContent.matched_skills) tailoredContent.matched_skills = [];\n  if (!tailoredContent.missing_skills) tailoredContent.missing_skills = [];\n  if (!tailoredContent.ats_score) tailoredContent.ats_score = 0;\n  if (!tailoredContent.tailored_summary) tailoredContent.tailored_summary = '';\n  if (!tailoredContent.key_achievements) tailoredContent.key_achievements = [];\n  \n  return {\n    json: {\n      ...($json),\n      tailoredResume: tailoredContent,\n      processed_at: new Date().toISOString(),\n      gemini_success: true\n    }\n  };\n  \n} catch (error) {\n  console.error('Error in Gemini parsing:', error);\n  \n  // Return with fallback data so workflow continues\n  return {\n    json: {\n      ...($json),\n      tailoredResume: {\n        matched_skills: [],\n        missing_skills: [],\n        ats_score: 0,\n        tailored_summary: 'Error: Could not analyze job match',\n        key_achievements: [],\n        recommended_focus: 'Manual review required'\n      },\n      processed_at: new Date().toISOString(),\n      gemini_success: false,\n      error: error.message\n    }\n  };\n}"
+        "jsCode": "try { const response = $json; if (response.error) { const isQuotaError = response.error.code === 429 || response.error.message?.includes('quota') || response.error.message?.includes('RESOURCE_EXHAUSTED'); return { json: { ...$json, tailoredResume: { matched_skills: ['JavaScript', 'React', 'Node.js', 'Python', 'SQL'], missing_skills: ['AWS', 'Docker'], ats_score: 65, tailored_summary: isQuotaError ? 'Quota exceeded today - using defaults' : 'API error - manual review needed', key_achievements: ['Built scalable applications', 'Led technical initiatives', 'Improved system performance'], recommended_focus: 'Emphasize technical skills and project outcomes' }, processed_at: new Date().toISOString(), gemini_success: false, quota_exceeded: isQuotaError, error: response.error.message } }; } const geminiResponse = response.candidates?.[0]?.content?.parts?.[0]?.text; if (!geminiResponse) { throw new Error('No response from Gemini'); } let cleanJson = geminiResponse.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim(); const jsonMatch = cleanJson.match(/\\{[\\s\\S]*\\}/); if (jsonMatch) { cleanJson = jsonMatch[0]; } let tailoredContent = JSON.parse(cleanJson); if (!tailoredContent.matched_skills) tailoredContent.matched_skills = []; if (!tailoredContent.missing_skills) tailoredContent.missing_skills = []; if (!tailoredContent.ats_score) tailoredContent.ats_score = 0; return { json: { ...$json, tailoredResume: tailoredContent, processed_at: new Date().toISOString(), gemini_success: true, quota_exceeded: false } }; } catch (error) { const isQuotaError = error.message?.includes('quota') || error.message?.includes('429'); return { json: { ...$json, tailoredResume: { matched_skills: ['JavaScript', 'React', 'Node.js'], missing_skills: ['AWS', 'Docker'], ats_score: 60, tailored_summary: 'Error analyzing - using defaults', key_achievements: ['Technical experience', 'Problem solving', 'Team collaboration'], recommended_focus: 'Manual review required' }, processed_at: new Date().toISOString(), gemini_success: false, quota_exceeded: isQuotaError, error: error.message } }; }"
       },
       "id": "parse-gemini",
       "name": "Parse Gemini Response",
@@ -475,9 +499,18 @@
           },
           "conditions": [
             {
+              "id": "quota-not-exceeded",
+              "leftValue": "={{ String($json.quota_exceeded) }}",
+              "rightValue": "false",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
               "id": "should-search-recruiter",
               "leftValue": "={{ $json.tailoredResume.ats_score }}",
-              "rightValue": 60,
+              "rightValue": 70,
               "operator": {
                 "type": "number",
                 "operation": "gte"
@@ -495,9 +528,7 @@
       "position": [
         3540,
         220
-      ],
-      "notesInFlow": true,
-      "notes": "Only search recruiter if ATS > 60%"
+      ]
     },
     {
       "parameters": {
@@ -545,7 +576,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// FIX #4: Improved recruiter extraction with strict confidence rules\ntry {\n  const searchResults = $json.organic_results || [];\n  \n  if (searchResults.length === 0) {\n    return {\n      json: {\n        ...($json),\n        recruiter: {\n          recruiter_name: null,\n          recruiter_title: null,\n          recruiter_email: null,\n          linkedin_url: null,\n          confidence: 'none',\n          source: 'no_results'\n        }\n      }\n    };\n  }\n  \n  const searchText = searchResults\n    .slice(0, 5)\n    .map(r => `Title: ${r.title}\\nSnippet: ${r.snippet}\\nURL: ${r.link}`)\n    .join('\\n\\n---\\n\\n');\n  \n  // Call Gemini to extract recruiter info with strict confidence requirements\n  const geminiApiKey = $('Initialize Variables').item.json.geminiApiKey;\n  const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${geminiApiKey}`;\n  \n  const response = await $http.post(geminiUrl, {\n    contents: [{\n      parts: [{\n        text: `Extract recruiter information from these LinkedIn search results for ${$json.company}:\n\n${searchText}\n\nCRITICAL RULES:\n1. Only return email if you find EXPLICIT evidence (e.g., email in snippet, clear contact pattern)\n2. If unsure about email, return NULL - do not guess\n3. Mark confidence as 'low' if you're inferring, 'medium' if partial evidence, 'high' only if explicit\n4. For email patterns, ONLY generate if you have recruiter's full name AND company domain\n\nReturn ONLY valid JSON (no markdown, no code blocks):\n{\n  \"recruiter_name\": \"Full Name or null\",\n  \"recruiter_title\": \"Job Title or null\",\n  \"recruiter_email\": \"email@company.com or null (ONLY if high confidence)\",\n  \"linkedin_url\": \"LinkedIn profile URL or null\",\n  \"confidence\": \"high/medium/low\"\n}\n\nCommon email patterns (use ONLY if you have name and are confident):\n- firstname.lastname@${$json.company.toLowerCase().replace(/[^a-z0-9]/g, '')}.com\n- first.last@${$json.company.toLowerCase().replace(/[^a-z0-9]/g, '')}.com\n\nIf no clear recruiter found, return all null values with 'low' confidence.`\n      }]\n    }],\n    generationConfig: {\n      temperature: 0.1,  // Lower temperature for more conservative responses\n      maxOutputTokens: 512\n    }\n  });\n  \n  const recruiterJson = response.candidates[0].content.parts[0].text\n    .replace(/```json\\n?/g, '')\n    .replace(/```\\n?/g, '')\n    .trim();\n  \n  let recruiterInfo;\n  try {\n    recruiterInfo = JSON.parse(recruiterJson);\n    \n    // FIX #4: Enforce strict confidence rules\n    // If confidence is low, force email to null\n    if (recruiterInfo.confidence === 'low') {\n      recruiterInfo.recruiter_email = null;\n    }\n    \n    // If no name found, force email to null (can't generate email without name)\n    if (!recruiterInfo.recruiter_name || recruiterInfo.recruiter_name === 'null') {\n      recruiterInfo.recruiter_email = null;\n      recruiterInfo.confidence = 'low';\n    }\n    \n    recruiterInfo.source = 'gemini_extraction';\n    \n  } catch (parseError) {\n    console.error('Failed to parse recruiter info:', parseError);\n    recruiterInfo = {\n      recruiter_name: null,\n      recruiter_title: null,\n      recruiter_email: null,\n      linkedin_url: null,\n      confidence: 'low',\n      source: 'parse_error'\n    };\n  }\n  \n  return {\n    json: {\n      ...($json),\n      recruiter: recruiterInfo\n    }\n  };\n  \n} catch (error) {\n  console.error('Recruiter search failed:', error);\n  return {\n    json: {\n      ...($json),\n      recruiter: {\n        recruiter_name: null,\n        recruiter_title: null,\n        recruiter_email: null,\n        linkedin_url: null,\n        confidence: 'error',\n        source: 'api_error',\n        error: error.message\n      }\n    }\n  };\n}"
+        "jsCode": "try { const searchResults = $json.organic_results || []; if (searchResults.length === 0) { return { json: { ...($json), recruiter: { recruiter_name: null, recruiter_title: null, recruiter_email: null, linkedin_url: null, confidence: 'none', source: 'no_results' } } }; } const location = $json.location || 'India'; const searchText = searchResults.slice(0, 5).map(r => `Title: ${r.title}\\nSnippet: ${r.snippet}\\nURL: ${r.link}`).join('\\n\\n---\\n\\n'); const geminiApiKey = $('Initialize Variables').first().json.geminiApiKey; const geminiUrl = `https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash-lite:generateContent?key=${geminiApiKey}`; const response = await $http.post(geminiUrl, { contents: [{ parts: [{ text: `Extract recruiter for ${$json.company} in ${location} from LinkedIn results:\\n\\n${searchText}\\n\\nRULES:\\n1. ONLY recruiters based in ${location} or with ${location} in title\\n2. Email: ONLY if EXPLICIT (in snippet/pattern with full name+domain)\\n3. Confidence: high=explicit, medium=partial, low=inferred\\n4. Return null if not ${location}-based\\n\\nJSON only (no markdown):\\n{\\n  \\\"recruiter_name\\\": \\\"Name or null\\\",\\n  \\\"recruiter_title\\\": \\\"Title or null\\\",\\n  \\\"recruiter_email\\\": \\\"email or null\\\",\\n  \\\"linkedin_url\\\": \\\"URL or null\\\",\\n  \\\"confidence\\\": \\\"high/medium/low\\\"\\n}` }] }], generationConfig: { temperature: 0.1, maxOutputTokens: 512 } }); const recruiterJson = response.candidates[0].content.parts[0].text.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim(); let recruiterInfo; try { recruiterInfo = JSON.parse(recruiterJson); if (recruiterInfo.confidence === 'low') { recruiterInfo.recruiter_email = null; } if (!recruiterInfo.recruiter_name || recruiterInfo.recruiter_name === 'null') { recruiterInfo.recruiter_email = null; recruiterInfo.confidence = 'low'; } recruiterInfo.source = 'gemini_extraction'; } catch (parseError) { console.error('Parse fail:', parseError); recruiterInfo = { recruiter_name: null, recruiter_title: null, recruiter_email: null, linkedin_url: null, confidence: 'low', source: 'parse_error' }; } return { json: { ...($json), recruiter: recruiterInfo } }; } catch (error) { console.error('Recruiter search fail:', error); const isQuotaError = error.message?.includes('quota') || error.message?.includes('429'); return { json: { ...($json), recruiter: { recruiter_name: null, recruiter_title: null, recruiter_email: null, linkedin_url: null, confidence: isQuotaError ? 'quota_error' : 'error', source: 'api_error', error: error.message } } }; }"
       },
       "id": "extract-recruiter",
       "name": "Extract Recruiter with AI",
@@ -588,7 +619,9 @@
             }
           ]
         },
-        "options": {}
+        "options": {
+          "keepOnlySet": false
+        }
       },
       "id": "skip-recruiter",
       "name": "Skip Recruiter Search",
@@ -603,8 +636,24 @@
     },
     {
       "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const company = $json.company || ''; const domain = company.toLowerCase().replace(/[^a-z0-9]/g, '') + '.com';  const hunterApiKey = $env.HUNTER_API_KEY; try { const response = await $http.get(`https://api.hunter.io/v2/domain-search?domain=${domain}&api_key=${hunterApiKey}&limit=1&department=hr`); const email = response.data?.emails?.[0]; return { json: { ...$json, recruiter: { recruiter_name: email ? `${email.first_name || ''} ${email.last_name || ''}`.trim() : 'HR Team', recruiter_title: email?.position || 'Recruiter', recruiter_email: email?.value || `careers@${domain}`, linkedin_url: email?.linkedin || null, confidence: email ? 'medium' : 'low', source: 'hunter_io' } } }; } catch (error) { return { json: { ...$json, recruiter: { recruiter_name: 'HR Team', recruiter_title: 'Recruiter', recruiter_email: `careers@${domain}`, linkedin_url: null, confidence: 'low', source: 'hunter_fallback' } } }; }"
+      },
+      "id": "guess-recruiter",
+      "name": "Guess Recruiter Info",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3760,
+        420
+      ]
+    },
+    {
+      "parameters": {
         "mode": "combine",
-        "combinationMode": "multiplex"
+        "combinationMode": "mergeByPosition",
+        "joinMode": "enrichInput1",
+        "options": {}
       },
       "id": "merge-recruiter-paths",
       "name": "Merge Paths",
@@ -620,7 +669,7 @@
         "operation": "append",
         "documentId": {
           "__rl": true,
-          "value": "={{ $('Initialize Variables').item.json.googleSheetId }}",
+          "value": "={{ $('Initialize Variables').first().json.googleSheetId }}",
           "mode": "id"
         },
         "sheetName": {
@@ -845,6 +894,13 @@
       "main": [
         [
           {
+            "node": "Generate Daily Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
             "node": "Wait (Rate Limit)",
             "type": "main",
             "index": 0
@@ -864,6 +920,17 @@
       ]
     },
     "Add Resume to Job Data": {
+      "main": [
+        [
+          {
+            "node": "Build Gemini Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Gemini Body": {
       "main": [
         [
           {
@@ -937,6 +1004,17 @@
       ]
     },
     "Skip Recruiter Search": {
+      "main": [
+        [
+          {
+            "node": "Guess Recruiter Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guess Recruiter Info": {
       "main": [
         [
           {

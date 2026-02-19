@@ -9,4 +9,6 @@ resumes/master-resume.pdf
 .log
 .aider*
 n8n_data/
-
+scripts/execution_*.md
+README.md
+Job Applications 2026.xlsx

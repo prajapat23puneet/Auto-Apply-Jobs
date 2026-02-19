@@ -18,6 +18,7 @@ services:
 
       # Encryption key for credentials (IMPORTANT: Keep this secret!)
       - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - N8N_API_KEY=${N8N_API_KEY}
 
       # Timezone
       - GENERIC_TIMEZONE=Asia/Kolkata
@@ -45,6 +46,7 @@ services:
       - SCRAPE_API_KEY=${SCRAPE_API_KEY}
       - ADZUNA_KEY=${ADZUNA_KEY}
       - ADZUNA_ID=${ADZUNA_ID}
+      - HUNTER_API_KEY=${HUNTER_API_KEY}
 
       # Job search parameters (customize these)
       - JOB_ROLE=Software Development Engineer
