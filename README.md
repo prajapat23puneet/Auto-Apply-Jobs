@@ -1,5 +1,7 @@
 # 🤖 Autonomous Job Application Agent
 
+[![gitcgr](https://gitcgr.com/badge/prajapat23puneet/Auto-Apply-Jobs.svg)](https://gitcgr.com/prajapat23puneet/Auto-Apply-Jobs)
+
 <div align="center">
 
 ![n8n](https://img.shields.io/badge/n8n-Workflow_Engine-EA4B71?logo=n8n&logoColor=white)
